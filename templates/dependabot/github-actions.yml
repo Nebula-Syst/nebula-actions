@@ -1,0 +1,16 @@
+  # ─── GitHub Actions (actions/checkout, setup-node...) ───────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Madrid"
+    groups:
+      # Todas las actions → 1 solo PR (auto-merge si no es major)
+      actions:
+        patterns:
+          - "*"
+    labels:
+      - "dependencies"
+      - "github-actions"

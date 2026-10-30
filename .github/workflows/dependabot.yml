@@ -1,0 +1,278 @@
+name: Dependabot
+
+# Workflow reutilizable para los PRs de Dependabot del repo que lo llama:
+#   · etiqueta el PR (patch / minor / major, security, ecosistema)
+#   · auto-mergea patch y minor si los tests del repo pasan
+#   · major y Docker → siempre revisión manual
+#   · tras cada merge (automático o manual) → tag vX.Y.Z + GitHub Release
+#
+# Se ejecuta en el contexto del repo que lo llama: checkout, PR, secretos y
+# minutos son suyos. Uso, requisitos y versiones: README.md.
+
+on:
+  workflow_call:
+    inputs:
+      tests-result:
+        description: >-
+          Resultado del job de tests del repo (`needs.tests.result`).
+          `none` si el repo no tiene tests: entonces solo se auto-mergean
+          vulnerabilidades.
+        type: string
+        default: none
+      release:
+        description: Crear tag vX.Y.Z y GitHub Release tras cada merge de Dependabot.
+        type: boolean
+        default: true
+    secrets:
+      # GitHub App de la org. Opcional, pero sin ella los merges no disparan
+      # otros workflows (deploy, docker-publish) ni el evento de release.
+      DEPS_APP_ID:
+        required: false
+      DEPS_APP_PRIVATE_KEY:
+        required: false
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # Etiqueta el PR, decide y, si toca, mergea. Un solo job para gastar el
+  # mínimo de minutos (cada job cuenta como mínimo uno).
+  # ───────────────────────────────────────────────────────────────────────────
+  manage:
+    name: Etiquetas y auto-merge
+    if: >-
+      github.event.action != 'closed' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write   # crear las etiquetas si no existen
+    # Un rebase de Dependabot sustituye a la ejecución anterior del mismo PR.
+    concurrency:
+      group: dependabot-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    outputs:
+      release-here: ${{ steps.merge.outputs.release-here }}
+      sha: ${{ steps.merge.outputs.sha }}
+    env:
+      HAS_APP: ${{ secrets.DEPS_APP_ID != '' && secrets.DEPS_APP_PRIVATE_KEY != '' }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+
+    steps:
+      - name: Token de la GitHub App
+        id: app
+        if: env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.DEPS_APP_ID }}
+          private-key: ${{ secrets.DEPS_APP_PRIVATE_KEY }}
+
+      - name: Metadatos de Dependabot
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ github.token }}
+
+      - name: Etiquetar
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          GROUP: ${{ steps.meta.outputs.dependency-group }}
+          ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
+        run: |
+          label() {  # nombre color descripción
+            gh label create "$1" --repo "$GITHUB_REPOSITORY" --color "$2" --description "$3" --force >/dev/null
+            gh pr edit "$PR_URL" --add-label "$1" >/dev/null
+          }
+          case "$UPDATE_TYPE" in
+            version-update:semver-patch) label patch 0e8a16 "Actualización patch" ;;
+            version-update:semver-minor) label minor fbca04 "Actualización minor" ;;
+            version-update:semver-major) label major d93f0b "Actualización major (revisión manual)" ;;
+          esac
+          case "$GROUP" in
+            *-security) label security b60205 "Parche de vulnerabilidad" ;;
+          esac
+          case "$ECOSYSTEM" in
+            npm*)     label javascript f1e05a "Dependencias JavaScript" ;;
+            composer) label php 4f5d95 "Dependencias PHP" ;;
+            docker*)  label docker 0db7ed "Imágenes Docker (revisión manual)" ;;
+            github*)  label github-actions 2088ff "GitHub Actions" ;;
+          esac
+
+      - name: Avisar de parche de seguridad con salto major
+        if: >-
+          github.event.action == 'opened' &&
+          endsWith(steps.meta.outputs.dependency-group, '-security') &&
+          steps.meta.outputs.update-type == 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+        run: |
+          gh pr comment "$PR_URL" --body "⚠️ **Revisión manual requerida**: este parche de seguridad exige un salto de versión **major** que puede romper el proyecto. Revísalo antes de mergear."
+
+      # Solo se mergea lo que cumple TODO; cualquier duda → revisión manual.
+      - name: Decidir
+        id: decide
+        env:
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          GROUP: ${{ steps.meta.outputs.dependency-group }}
+          ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
+          DEPS: ${{ steps.meta.outputs.dependency-names }}
+          TESTS: ${{ inputs.tests-result }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          security=false
+          case "$GROUP" in *-security) security=true ;; esac
+
+          if [ "$BASE" != "$DEFAULT_BRANCH" ]; then
+            reason="El PR no va a la rama por defecto ($DEFAULT_BRANCH)"
+          elif [[ "$ECOSYSTEM" == docker* ]]; then
+            reason="Docker: siempre revisión manual"
+          elif [ "$UPDATE_TYPE" != version-update:semver-patch ] && [ "$UPDATE_TYPE" != version-update:semver-minor ]; then
+            type="${UPDATE_TYPE#version-update:semver-}"
+            reason="Actualización ${type:-de tipo desconocido}: revisión manual"
+          elif [ "$TESTS" = none ] && [ "$security" != true ]; then
+            reason="Repo sin tests: solo se auto-mergean vulnerabilidades"
+          elif [ "$TESTS" != none ] && [ "$TESTS" != success ]; then
+            reason="Tests: $TESTS"
+          else
+            reason=""
+          fi
+
+          if [ -z "$reason" ]; then
+            echo "merge=true" >> "$GITHUB_OUTPUT"
+            verdict="✅ Auto-merge"
+          else
+            echo "merge=false" >> "$GITHUB_OUTPUT"
+            verdict="✋ Revisión manual: $reason"
+          fi
+
+          {
+            echo "### $verdict"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Dependencias | ${DEPS} |"
+            echo "| Tipo | ${UPDATE_TYPE:-?} |"
+            echo "| Ecosistema | ${ECOSYSTEM:-?} |"
+            echo "| Seguridad | ${security} |"
+            echo "| Tests | ${TESTS} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Aprobar y mergear
+        id: merge
+        if: steps.decide.outputs.merge == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          VIA_APP: ${{ steps.app.outputs.token != '' }}
+        run: |
+          # Sin la App, aprobar con GITHUB_TOKEN requiere "Allow GitHub Actions
+          # to create and approve pull requests"; si falla, se mergea igual.
+          gh pr review --approve "$PR_URL" || echo "::warning::No se pudo aprobar el PR"
+          # --match-head-commit: solo se mergea el commit exacto que pasó los tests.
+          gh pr merge --squash --match-head-commit "$HEAD_SHA" "$PR_URL"
+          echo "sha=$(gh pr view "$PR_URL" --json mergeCommit -q .mergeCommit.oid)" >> "$GITHUB_OUTPUT"
+          # Con la App, el merge dispara el evento "closed" y la release se crea
+          # en esa ejecución. Con GITHUB_TOKEN ese evento no llega: se crea aquí.
+          if [ "$VIA_APP" != true ]; then
+            echo "release-here=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Mergeado con GITHUB_TOKEN: no se dispararán deploys ni otros workflows. Configura la GitHub App (README)."
+          fi
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # PRs de Docker: los tests de la app no usan la imagen, así que se comprueba
+  # que todos los Dockerfile compilan, que las imágenes de compose existen y,
+  # si el repo lo define, que la imagen arranca (docker/smoke.sh).
+  # Contexto de build = raíz del repo, igual que docker/prod/build.sh.
+  # ───────────────────────────────────────────────────────────────────────────
+  docker:
+    name: Docker build
+    if: >-
+      github.event.action != 'closed' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.actor == 'dependabot[bot]' &&
+      startsWith(github.head_ref, 'dependabot/docker')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build de los Dockerfile
+        run: |
+          [ -d docker ] || { echo "Sin carpeta docker/"; exit 0; }
+          find docker -type f -name 'Dockerfile*' | sort | while read -r f; do
+            echo "::group::docker build -f $f ."
+            docker build -f "$f" .
+            echo "::endgroup::"
+          done
+
+      - name: Pull de las imágenes de docker-compose
+        run: |
+          [ -d docker ] || exit 0
+          files=$(find docker -type f -name '*compose*.y*ml')
+          [ -z "$files" ] && exit 0
+          # shellcheck disable=SC2086
+          { grep -hE '^\s*image:' $files || true; } \
+            | awk '{print $2}' | tr -d "'\"" | { grep -v '\$' || true; } | sort -u \
+            | while read -r img; do docker pull "$img"; done
+
+      - name: Smoke test (docker/smoke.sh)
+        if: hashFiles('docker/smoke.sh') != ''
+        run: bash docker/smoke.sh
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Bump patch + tag + GitHub Release
+  #   · con la App: en la ejecución del evento "closed" (auto-merge o manual)
+  #   · sin la App: justo después del auto-merge (release-here)
+  # Con el token de la App, la release dispara los workflows `on: release`.
+  # ───────────────────────────────────────────────────────────────────────────
+  release:
+    name: Release
+    needs: manage
+    if: >-
+      always() &&
+      inputs.release &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      (
+        needs.manage.outputs.release-here == 'true' ||
+        (github.event.action == 'closed' && github.event.pull_request.merged)
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    # Dos merges seguidos no pueden calcular el mismo tag.
+    concurrency:
+      group: release-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      HAS_APP: ${{ secrets.DEPS_APP_ID != '' && secrets.DEPS_APP_PRIVATE_KEY != '' }}
+
+    steps:
+      - name: Token de la GitHub App
+        id: app
+        if: env.HAS_APP == 'true'
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.DEPS_APP_ID }}
+          private-key: ${{ secrets.DEPS_APP_PRIVATE_KEY }}
+
+      - name: Bump patch y crear Release
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}
+          SHA: ${{ needs.manage.outputs.sha || github.event.pull_request.merge_commit_sha }}
+        run: |
+          last=$(gh api "repos/$GITHUB_REPOSITORY/tags" --paginate -q '.[].name' \
+            | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -V | tail -n1)
+          IFS=. read -r major minor patch <<< "${last:-v0.0.0}"
+          new="${major}.${minor}.$((patch + 1))"
+          gh release create "$new" --repo "$GITHUB_REPOSITORY" --target "$SHA" --title "$new" --generate-notes
+          echo "### 🏷️ Release $new (anterior: ${last:-ninguna})" >> "$GITHUB_STEP_SUMMARY"

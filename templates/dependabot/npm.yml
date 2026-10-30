@@ -1,0 +1,36 @@
+  # ─── Dependencias JavaScript (npm / pnpm: Dependabot usa "npm" para ambos) ──
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Madrid"
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
+    open-pull-requests-limit: 10
+    groups:
+      # Todas las vulnerabilidades de seguridad npm → 1 solo PR (auto-merge)
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      # Actualizaciones patch/minor → 1 solo PR (auto-merge)
+      npm-patch-minor:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+        patterns:
+          - "*"
+      # Actualizaciones major → 1 solo PR (revisión manual)
+      npm-major:
+        applies-to: version-updates
+        update-types:
+          - "major"
+        patterns:
+          - "*"
+    labels:
+      - "dependencies"
+      - "javascript"

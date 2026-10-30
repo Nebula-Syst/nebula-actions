@@ -1,0 +1,192 @@
+name: Tests
+
+# Workflow reutilizable: detecta la tecnología del repo que lo llama y pasa
+# sus tests. Si el repo no tiene tests, no falla: devuelve result=none.
+#
+#   Laravel  → composer.json + artisan: PHP (config.platform.php de composer.json)
+#              + MySQL 8 + php artisan test
+#   pnpm     → pnpm-lock.yaml: pnpm install --frozen-lockfile + pnpm test
+#   npm      → package-lock.json: npm ci + npm test
+#
+# Node sale de .nvmrc / .node-version si existen; pnpm, de "packageManager"
+# de package.json si existe. Todo se puede forzar con las entradas.
+
+on:
+  workflow_call:
+    inputs:
+      stack:
+        description: "auto | pnpm | npm | laravel | none"
+        type: string
+        default: auto
+      node-version:
+        description: Node si el repo no tiene .nvmrc ni .node-version.
+        type: string
+        default: "24"
+      pnpm-version:
+        description: pnpm si package.json no tiene "packageManager".
+        type: string
+        default: "9"
+      php-version:
+        description: PHP si composer.json no tiene config.platform.php.
+        type: string
+        default: "8.3"
+      test-command:
+        description: Sustituye al comando de tests por defecto.
+        type: string
+        default: ""
+    outputs:
+      result:
+        description: "success si se ejecutaron tests y pasaron; none si el repo no tiene tests."
+        value: ${{ jobs.test.outputs.result }}
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.detect.outputs.tests == 'true' && 'success' || 'none' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Detectar tecnología
+        id: detect
+        env:
+          STACK: ${{ inputs.stack }}
+          TEST_COMMAND: ${{ inputs.test-command }}
+          PNPM_VERSION: ${{ inputs.pnpm-version }}
+          PHP_VERSION: ${{ inputs.php-version }}
+        run: |
+          stack=$STACK
+          if [ "$stack" = auto ]; then
+            if [ -f composer.json ] && [ -f artisan ]; then stack=laravel
+            elif [ -f pnpm-lock.yaml ]; then stack=pnpm
+            elif [ -f package-lock.json ]; then stack=npm
+            else stack=none
+            fi
+          fi
+
+          tests=false
+          case "$stack" in
+            laravel)
+              if find tests -name '*Test.php' -print -quit 2>/dev/null | grep -q .; then tests=true; fi ;;
+            pnpm|npm)
+              if jq -e '(.scripts.test // "") as $t | $t != "" and ($t | test("no test specified") | not)' package.json >/dev/null 2>&1; then tests=true; fi ;;
+          esac
+          if [ -n "$TEST_COMMAND" ] && [ "$stack" != none ]; then tests=true; fi
+
+          node_file=""
+          for f in .nvmrc .node-version; do
+            if [ -f "$f" ]; then node_file=$f; break; fi
+          done
+          # Con "packageManager" en package.json, pnpm/action-setup falla si
+          # además se le pasa la versión.
+          pnpm_version=$PNPM_VERSION
+          if jq -e '.packageManager' package.json >/dev/null 2>&1; then pnpm_version=""; fi
+          php_version=$(jq -r '.config.platform.php // empty' composer.json 2>/dev/null || true)
+
+          {
+            echo "stack=$stack"
+            echo "tests=$tests"
+            echo "node-file=$node_file"
+            echo "pnpm-version=$pnpm_version"
+            echo "php-version=${php_version:-$PHP_VERSION}"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$tests" = true ]; then
+            echo "### 🧪 Tests ($stack)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ⚪ Sin tests que ejecutar (stack: $stack)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # ── Node (pnpm / npm) ───────────────────────────────────────────────
+      - uses: pnpm/action-setup@v4
+        if: steps.detect.outputs.tests == 'true' && steps.detect.outputs.stack == 'pnpm'
+        with:
+          version: ${{ steps.detect.outputs.pnpm-version }}
+
+      - uses: actions/setup-node@v4
+        if: steps.detect.outputs.tests == 'true' && (steps.detect.outputs.stack == 'pnpm' || steps.detect.outputs.stack == 'npm')
+        with:
+          node-version-file: ${{ steps.detect.outputs.node-file }}
+          node-version: ${{ steps.detect.outputs.node-file == '' && inputs.node-version || '' }}
+          cache: ${{ steps.detect.outputs.stack }}
+
+      - name: Instalar y pasar tests (pnpm)
+        if: steps.detect.outputs.tests == 'true' && steps.detect.outputs.stack == 'pnpm'
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: |
+          pnpm install --frozen-lockfile
+          if [ -n "$TEST_COMMAND" ]; then eval "$TEST_COMMAND"; else pnpm test; fi
+
+      - name: Instalar y pasar tests (npm)
+        if: steps.detect.outputs.tests == 'true' && steps.detect.outputs.stack == 'npm'
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: |
+          npm ci
+          if [ -n "$TEST_COMMAND" ]; then eval "$TEST_COMMAND"; else npm test; fi
+
+      # ── Laravel ─────────────────────────────────────────────────────────
+      # MySQL 8, no sqlite: las migraciones pueden usar SQL propio de MySQL.
+      # Se arranca primero para que se inicialice mientras se instala PHP.
+      - name: Arrancar MySQL 8
+        if: steps.detect.outputs.tests == 'true' && steps.detect.outputs.stack == 'laravel'
+        run: |
+          docker run -d --name mysql -p 3306:3306 \
+            -e MYSQL_DATABASE=testing -e MYSQL_USER=testing \
+            -e MYSQL_PASSWORD=testing -e MYSQL_ROOT_PASSWORD=testing \
+            mysql:8.0
+
+      - uses: shivammathur/setup-php@v2
+        if: steps.detect.outputs.tests == 'true' && steps.detect.outputs.stack == 'laravel'
+        with:
+          php-version: ${{ steps.detect.outputs.php-version }}
+          extensions: mbstring, dom, fileinfo, curl, pdo_mysql, bcmath, gd, zip, exif, intl
+          coverage: none
+
+      - name: Cache de Composer
+        if: steps.detect.outputs.tests == 'true' && steps.detect.outputs.stack == 'laravel'
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ steps.detect.outputs.php-version }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ steps.detect.outputs.php-version }}-
+
+      - name: Instalar dependencias de Laravel
+        if: steps.detect.outputs.tests == 'true' && steps.detect.outputs.stack == 'laravel'
+        run: |
+          if [ -f .env.example ]; then cp .env.example .env; fi
+          composer install --no-interaction --prefer-dist --no-progress
+          php artisan key:generate
+
+      - name: Esperar a MySQL
+        if: steps.detect.outputs.tests == 'true' && steps.detect.outputs.stack == 'laravel'
+        run: |
+          for _ in $(seq 1 45); do
+            if docker exec mysql mysql -utesting -ptesting -e 'SELECT 1' testing >/dev/null 2>&1; then exit 0; fi
+            sleep 2
+          done
+          docker logs mysql
+          exit 1
+
+      # Las DB_* de phpunit.xml no llevan force="true", así que estas variables
+      # de entorno tienen prioridad y apuntan al MySQL de arriba.
+      - name: Pasar tests (Laravel)
+        if: steps.detect.outputs.tests == 'true' && steps.detect.outputs.stack == 'laravel'
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: testing
+          DB_USERNAME: testing
+          DB_PASSWORD: testing
+        run: |
+          if [ -n "$TEST_COMMAND" ]; then eval "$TEST_COMMAND"; else php artisan test; fi

@@ -1,0 +1,35 @@
+name: Lint
+
+# Valida los workflows de este repo con actionlint (incluye shellcheck) antes
+# de que los use ningún repo. Repo público → minutos gratis.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: actionlint
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+      - name: shellcheck de los scripts
+        run: shellcheck scripts/*.sh templates/docker/smoke.sh
+
+      # Las plantillas llaman a ./.github/workflows/tests.yml, que solo existe
+      # en los repos destino: aquí basta con que sean YAML válido.
+      - name: Plantillas YAML válidas
+        run: |
+          for f in templates/workflows/*.yml templates/dependabot/*.yml; do
+            yq e '.' "$f" > /dev/null || { echo "::error file=$f::YAML inválido"; exit 1; }
+          done

@@ -1,0 +1,41 @@
+# nebula-actions: managed (no edites a mano: se regenera con scripts/sync.sh)
+name: CI
+
+# Igual en todos los repos de Nebula-Syst. Toda la lógica vive en
+# Nebula-Syst/nebula-actions:
+#   · tests: detecta la tecnología (pnpm / npm / Laravel) y pasa los tests
+#   · dependabot: con el resultado, etiqueta y auto-mergea los PRs de Dependabot
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # En cada push a main y en cada PR. No en los PRs de Docker de Dependabot:
+  # esos se validan con docker build dentro de nebula-actions.
+  tests:
+    if: >-
+      github.event.action != 'closed' &&
+      !startsWith(github.head_ref, 'dependabot/docker')
+    uses: Nebula-Syst/nebula-actions/.github/workflows/tests.yml@v1.0.0
+
+  dependabot:
+    needs: tests
+    if: ${{ !cancelled() && github.event.pull_request.user.login == 'dependabot[bot]' }}
+    uses: Nebula-Syst/nebula-actions/.github/workflows/dependabot.yml@v1.0.0
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    with:
+      # success / failure / skipped, o none si el repo no tiene tests
+      tests-result: ${{ needs.tests.result == 'success' && needs.tests.outputs.result || needs.tests.result }}
+    secrets: inherit

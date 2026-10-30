@@ -1,0 +1,7 @@
+# nebula-actions: managed
+# Generado por Nebula-Syst/nebula-actions (scripts/sync.sh). Los cambios hechos
+# aquí a mano se pierden en la siguiente sincronización: cámbialo en las
+# plantillas de nebula-actions, o quita la primera línea para que el script
+# deje de gestionar este archivo.
+version: 2
+updates:

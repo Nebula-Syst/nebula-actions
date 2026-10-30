@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Mantiene al día las actions que usan estos workflows (checkout,
+  # fetch-metadata, create-github-app-token...).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Madrid"
+    groups:
+      actions:
+        patterns:
+          - "*"
+    labels:
+      - "dependencies"
+      - "github-actions"

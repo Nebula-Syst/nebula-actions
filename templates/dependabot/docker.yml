@@ -1,0 +1,23 @@
+  # ─── Docker (FROM de los Dockerfile en docker/dev, docker/prod...) ──────────
+  # Nunca se auto-mergea: el workflow hace docker build y lo revisas tú.
+  # Fija el digest (FROM node:24-alpine@sha256:...) para recibir también los
+  # parches de la imagen; con tags sin versión (nginx:alpine) no hace nada.
+  - package-ecosystem: "docker"
+    directories:
+      - "/docker/*"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Madrid"
+    ignore:
+      # Node impar (25, 27...) no es LTS: nunca se propone.
+      - dependency-name: "node"
+        versions: ["25.x", "27.x", "29.x", "31.x", "33.x"]
+    groups:
+      docker:
+        patterns:
+          - "*"
+    labels:
+      - "dependencies"
+      - "docker"
