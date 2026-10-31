@@ -63,14 +63,14 @@ jobs:
       - name: Token de la GitHub App
         id: app
         if: env.HAS_APP == 'true'
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.DEPS_APP_ID }}
           private-key: ${{ secrets.DEPS_APP_PRIVATE_KEY }}
 
       - name: Metadatos de Dependabot
         id: meta
-        uses: dependabot/fetch-metadata@v2
+        uses: dependabot/fetch-metadata@v3
         with:
           github-token: ${{ github.token }}
 
@@ -200,7 +200,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -260,7 +260,7 @@ jobs:
       - name: Token de la GitHub App
         id: app
         if: env.HAS_APP == 'true'
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.DEPS_APP_ID }}
           private-key: ${{ secrets.DEPS_APP_PRIVATE_KEY }}
