@@ -21,7 +21,7 @@ Con este sistema:
 | **Job** | Cada bloque de trabajo de un workflow. Se ejecuta en una máquina de GitHub y consume minutos. |
 | **Workflow reutilizable** | Un workflow que no se lanza solo, sino que **otro workflow lo llama** con `uses: org/repo/.github/workflows/x.yml@versión`. Se ejecuta **dentro del repo que lo llama**: su código, sus secretos, sus minutos. El repo donde vive solo guarda las instrucciones. |
 | **Dependabot** | El bot de GitHub que abre los PRs de actualización. Lee su configuración de `.github/dependabot.yml` de cada repo; no hay forma de compartirla. |
-| **Tag / versión** | Una etiqueta (`v1.0.0`) sobre un commit. Los repos llaman a `nebula-actions` por tag, así que un cambio aquí no les llega hasta que se publica una versión nueva y la aceptan. |
+| **Tag / versión** | Una etiqueta (`v1.2.0`) sobre un commit. Los repos llaman a `nebula-actions` con `@v1`, un tag que se mueve solo a la última `v1.x.y`: un cambio aquí llega a todos en cuanto publicas una versión. |
 
 ## 3. Las piezas
 
@@ -39,8 +39,8 @@ flowchart LR
     end
     DEP -. configura .-> BOT["Dependabot"]
     BOT -- abre PRs --> REPO
-    CI -- "uses: …/tests.yml@v1.0.0" --> T
-    CI -- "uses: …/dependabot.yml@v1.0.0" --> D
+    CI -- "uses: …/tests.yml@v1" --> T
+    CI -- "uses: …/dependabot.yml@v1" --> D
     S -- "copia los moldes<br/>(un PR por repo)" --> REPO
     TPL --> S
 ```
@@ -130,13 +130,13 @@ En el repo, pestaña **Actions**, abre la ejecución de *CI* del PR. En **Summar
 
 ### 5.1 Una sola vez, para toda la org
 
-1. **Publicar `nebula-actions`** con un tag. Mientras no exista `v1.0.0`, los `ci.yml` que apuntan a él fallan.
+1. **Publicar `nebula-actions`** con un tag `v1.x.y`. `major-tag.yml` crea o mueve `v1`, que es al que apuntan los `ci.yml`; si no existe, fallan.
    ```bash
-   git tag v1.0.0 && git push --tags
+   git tag v1.1.0 && git push origin v1.1.0
    ```
 2. **Crear la GitHub App** (pasos en el README). Es gratis. Sin ella el sistema funciona, pero:
    - los merges automáticos **no disparan** deploy ni release, porque GitHub no lanza workflows por acciones de su token interno;
-   - no se pueden mergear PRs que tocan `.github/workflows`, y la actualización de `nebula-actions` es uno de ellos.
+   - no se pueden mergear PRs que tocan `.github/workflows`. Las versiones `v1.x.y` llegan igual por el tag `@v1`; solo el salto a `@v2` hay que mergearlo a mano.
 3. **Instalar `gh`** en tu máquina (`gh auth login`) para usar los scripts.
 
 ### 5.2 Por cada repo
@@ -178,7 +178,7 @@ Si un repo necesita otra cosa (Postgres, arrancar la imagen, un monorepo como Fo
 | --- | --- |
 | Cada lunes (unos 15 min) | Revisa los [PRs abiertos de Dependabot en la org](https://github.com/pulls?q=is%3Aopen+is%3Apr+org%3ANebula-Syst+author%3Aapp%2Fdependabot). Decide sobre los `major` y `docker`. Un patch o minor que sigue abierto significa que sus tests fallaron: mira por qué. |
 | Llega un PR de una versión impar de Node | No debería: está ignorada en `dependabot.yml`. |
-| Quieres cambiar la lógica | Cámbiala en `nebula-actions` y publica un tag nuevo. Cada repo recibe un PR de Dependabot que se auto-mergea si es patch o minor y sus tests pasan. |
+| Quieres cambiar la lógica | Cámbiala en `nebula-actions` y publica un tag `v1.x.y`: todos los repos la usan en su siguiente ejecución. Si es incompatible, `v2.0.0`: cada repo recibe un PR de Dependabot para revisarlo. |
 | Quieres cambiar `ci.yml` o `dependabot.yml` de todos | Cambia `templates/` y ejecuta `bash scripts/sync.sh`: abre un PR en cada repo. |
 | Rotas la clave de la App | `bash scripts/set-secrets.sh <app-id> <nueva.pem>` |
 
@@ -186,7 +186,8 @@ Si un repo necesita otra cosa (Postgres, arrancar la imagen, un monorepo como Fo
 
 | Síntoma | Causa probable | Qué hacer |
 | --- | --- | --- |
-| Todos los CI fallan con *"unable to find reusable workflow"* | El tag de `nebula-actions` no existe | Publica el tag al que apunta `ci.yml` |
+| Todos los CI fallan con *"unable to find reusable workflow"* | El tag `v1` de `nebula-actions` no existe | Mira la ejecución de *Tag de versión mayor* en `nebula-actions`, o créalo: `git tag -f v1 v1.x.y && git push -f origin v1` |
+| Todos los CI empiezan a fallar a la vez | La última versión publicada tiene un fallo | Arréglalo y publica otra versión, o vuelve atrás: `git tag -f v1 <versión-buena> && git push -f origin v1` |
 | PR patch o minor que no se mergea | Tests en rojo | Mira el job de tests. Si el fallo es real, arréglalo en una rama propia; Dependabot rebasea y se reintenta |
 | *"Revisión manual: Repo sin tests"* | El repo no tiene script `test` o `tests/*Test.php` | Normal: sin tests, solo se auto-mergean vulnerabilidades |
 | Se mergea pero no despliega ni crea release | Falta la GitHub App o sus secretos en ese repo | `set-secrets.sh` para ese repo |

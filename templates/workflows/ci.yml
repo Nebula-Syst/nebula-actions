@@ -25,12 +25,12 @@ jobs:
     if: >-
       github.event.action != 'closed' &&
       !startsWith(github.head_ref, 'dependabot/docker')
-    uses: Nebula-Syst/nebula-actions/.github/workflows/tests.yml@v1.0.0
+    uses: Nebula-Syst/nebula-actions/.github/workflows/tests.yml@v1
 
   dependabot:
     needs: tests
     if: ${{ !cancelled() && github.event.pull_request.user.login == 'dependabot[bot]' }}
-    uses: Nebula-Syst/nebula-actions/.github/workflows/dependabot.yml@v1.0.0
+    uses: Nebula-Syst/nebula-actions/.github/workflows/dependabot.yml@v1
     permissions:
       contents: write
       pull-requests: write

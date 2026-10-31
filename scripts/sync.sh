@@ -147,11 +147,14 @@ main() {
     esac
   done
 
-  # Las llamadas apuntan a la última versión publicada de nebula-actions.
-  local version
-  version=$(gh api "repos/$ORG/nebula-actions/tags" --paginate -q '.[].name' \
+  # Las llamadas apuntan al tag móvil de la última versión mayor (p. ej. v1),
+  # que major-tag.yml mueve en cada release: así las versiones nuevas llegan
+  # a todos los repos sin PRs.
+  local latest version
+  latest=$(gh api "repos/$ORG/nebula-actions/tags" --paginate -q '.[].name' \
     | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -V | tail -n1)
-  [ -n "$version" ] || { echo "nebula-actions no tiene ningún tag vX.Y.Z: publica uno antes." >&2; exit 1; }
+  [ -n "$latest" ] || { echo "nebula-actions no tiene ningún tag vX.Y.Z: publica uno antes." >&2; exit 1; }
+  version=${latest%%.*}
 
   if [ ${#repos[@]} -eq 0 ]; then
     mapfile -t repos < <(gh repo list "$ORG" --topic "$TOPIC" --no-archived --source --limit 200 --json name -q '.[].name' | sort)
@@ -161,7 +164,7 @@ main() {
   work=$(mktemp -d)
   trap 'rm -rf "$work"' EXIT
 
-  echo "nebula-actions $version → ${#repos[@]} repos$($dry && echo ' (dry-run)' || true)"
+  echo "nebula-actions $version ($latest) → ${#repos[@]} repos$($dry && echo ' (dry-run)' || true)"
   local failed=() repo
   for repo in "${repos[@]}"; do
     echo "▸ $repo"

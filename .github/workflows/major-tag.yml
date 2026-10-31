@@ -1,0 +1,39 @@
+name: Tag de versión mayor
+
+# Mantiene el tag móvil vN (p. ej. v1) apuntando a la última vN.x.y publicada.
+# Los repos llaman a nebula-actions con @v1, así que publicar v1.4.0 los
+# actualiza a todos sin PRs. Un cambio incompatible va en v2: Dependabot abre
+# entonces un PR en cada repo para que lo revises.
+on:
+  push:
+    tags: ['v*.*.*']
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: major-tag
+
+jobs:
+  move:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mover vN a la última vN.x.y
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          [[ $TAG =~ ^v([0-9]+)\.[0-9]+\.[0-9]+$ ]] || { echo "$TAG no es vX.Y.Z: nada que hacer"; exit 0; }
+          major="v${BASH_REMATCH[1]}"
+          # La última de esa serie (publicar un parche antiguo no hace retroceder vN).
+          latest=$(git tag -l "$major.*" | { grep -E "^$major\.[0-9]+\.[0-9]+$" || true; } | sort -V | tail -n1)
+          sha=$(git rev-list -n1 "$latest")
+          git tag -f "$major" "$sha"
+          git push -f origin "refs/tags/$major"
+          echo "🏷️ \`$major\` → \`$latest\` (${sha:0:7})" >> "$GITHUB_STEP_SUMMARY"

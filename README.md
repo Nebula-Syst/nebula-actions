@@ -51,7 +51,7 @@ Si package.json tiene `"packageManager": "pnpm@x"`, usa esa versión de pnpm.
 
 ### 1. Crear la GitHub App (una vez)
 
-Sin ella todo funciona, pero lo que mergea el `GITHUB_TOKEN` no dispara otros workflows (deploy, `on: release`) ni puede mergear PRs que tocan `.github/workflows`. Entre ellos están los que actualizan la versión de este repo, así que **sin App el sistema no se actualiza solo**.
+Sin ella todo funciona, pero lo que mergea el `GITHUB_TOKEN` no dispara otros workflows (deploy, `on: release`) ni puede mergear PRs que tocan `.github/workflows`. Las versiones nuevas de este repo llegan igual gracias al tag `@v1`; solo el salto a una versión mayor (`@v2`) habría que mergearlo a mano.
 
 1. En la org, ve a **Settings → Developer settings → GitHub Apps → New GitHub App**.
 2. En **Name** pon `Nebula Deps`. En **Homepage URL** vale `https://github.com/Nebula-Syst`.
@@ -110,11 +110,15 @@ Copia `templates/docker/smoke.sh` a `docker/smoke.sh` del repo y ajusta `DOCKERF
 
 ## Publicar una versión
 
+Los repos llaman a `nebula-actions` con **`@v1`**, un tag móvil que siempre apunta a la última `v1.x.y`. Al publicar una versión, `major-tag.yml` lo mueve solo, así que **todos los repos usan la versión nueva en su siguiente ejecución, sin PRs**.
+
 1. Cambia lo que haga falta y haz push. `lint.yml` (actionlint + shellcheck) tiene que salir en verde.
-2. Crea el tag, `git tag v1.1.0 && git push --tags`, siguiendo semver:
-   - **patch o minor**: cada repo recibe un PR de Dependabot que se auto-mergea si sus tests pasan.
-   - **major**: cada repo lo revisa a mano.
-3. Si cambian las plantillas (`templates/`), ejecuta `bash scripts/sync.sh`.
+2. Publica el tag siguiendo semver: `git tag v1.2.0 && git push origin v1.2.0`, o crea una Release desde GitHub.
+   - **patch o minor** (`v1.2.0`): compatible, llega a todos al momento.
+   - **major** (`v2.0.0`): cambio incompatible, como una entrada nueva obligatoria. `v1` no se mueve, y Dependabot abre un PR en cada repo para pasar a `@v2`, que revisas tú.
+3. Si cambian las plantillas (`templates/`), ejecuta `bash scripts/sync.sh`: abre un PR en cada repo.
+
+> ⚠️ Como una versión nueva llega a todos a la vez, prueba antes los cambios grandes en un repo apuntándolo a la rama (`@mi-rama`) en un PR.
 
 ## Contenido
 
@@ -122,6 +126,7 @@ Copia `templates/docker/smoke.sh` a `docker/smoke.sh` del repo y ajusta `DOCKERF
 .github/workflows/tests.yml        tests reutilizables (pnpm / npm / Laravel)
 .github/workflows/dependabot.yml   gestión de PRs de Dependabot reutilizable
 .github/workflows/lint.yml         valida este repo en cada push
+.github/workflows/major-tag.yml    mueve el tag v1 a cada versión nueva
 templates/workflows/ci.yml         el archivo que va en cada repo
 templates/dependabot/              trozos de dependabot.yml por ecosistema
 templates/docker/smoke.sh          smoke test opcional para PRs de Docker
