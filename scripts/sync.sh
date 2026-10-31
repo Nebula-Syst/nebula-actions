@@ -108,7 +108,7 @@ generate() {
 sync_repo() {
   local repo=$1 version=$2 dry=$3 dir="$work/$1"
   gh repo clone "$ORG/$repo" "$dir" -- --depth 1 --quiet
-  cd "$dir"
+  cd "$dir" || return 1
   local base
   base=$(git rev-parse --abbrev-ref HEAD)
 
@@ -164,7 +164,9 @@ main() {
   work=$(mktemp -d)
   trap 'rm -rf "$work"' EXIT
 
-  echo "nebula-actions $version ($latest) → ${#repos[@]} repos$($dry && echo ' (dry-run)' || true)"
+  local mode=""
+  if $dry; then mode=" (dry-run)"; fi
+  echo "nebula-actions $version ($latest) → ${#repos[@]} repos$mode"
   local failed=() repo
   for repo in "${repos[@]}"; do
     echo "▸ $repo"

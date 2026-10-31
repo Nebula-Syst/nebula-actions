@@ -43,5 +43,9 @@ for repo in "${repos[@]}"; do
 done
 
 echo
-[ ${#failed[@]} -eq 0 ] && echo "Listo: ${#repos[@]} repos." || { echo "Fallaron: ${failed[*]}"; exit 1; }
+if [ ${#failed[@]} -gt 0 ]; then
+  echo "Fallaron: ${failed[*]}"
+  exit 1
+fi
+echo "Listo: ${#repos[@]} repos."
 echo "Guarda la .pem en un sitio seguro (gestor de contraseñas) y bórrala de la carpeta de descargas."
