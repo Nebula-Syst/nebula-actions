@@ -50,7 +50,7 @@ jobs:
       result: ${{ steps.detect.outputs.tests == 'true' && 'success' || 'none' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -105,12 +105,12 @@ jobs:
           fi
 
       # ── Node (pnpm / npm) ───────────────────────────────────────────────
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         if: steps.detect.outputs.tests == 'true' && steps.detect.outputs.stack == 'pnpm'
         with:
           version: ${{ steps.detect.outputs.pnpm-version }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: steps.detect.outputs.tests == 'true' && (steps.detect.outputs.stack == 'pnpm' || steps.detect.outputs.stack == 'npm')
         with:
           node-version-file: ${{ steps.detect.outputs.node-file }}
@@ -153,7 +153,7 @@ jobs:
 
       - name: Cache de Composer
         if: steps.detect.outputs.tests == 'true' && steps.detect.outputs.stack == 'laravel'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: vendor
           key: composer-${{ steps.detect.outputs.php-version }}-${{ hashFiles('composer.lock') }}
